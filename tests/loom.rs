@@ -15,9 +15,9 @@ fn a_reader_that_sees_the_flag_sees_the_weights() {
         let (w, r) = (Arc::clone(&weights), Arc::clone(&ready));
         let loader = thread::spawn(move || {
             w.store(1, Relaxed); // the new weights
-            r.store(1, Relaxed); // then the flag
+            r.store(1, Release); // then the flag
         });
-        let flag = ready.load(Relaxed);
+        let flag = ready.load(Acquire);
         assert!(weights.load(Relaxed) >= flag, "saw the flag first");
         loader.join().unwrap();
     });

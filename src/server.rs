@@ -7,7 +7,7 @@ use crate::model::Weights;
 use crate::tokenizer::Tokenizer;
 use std::collections::{HashMap, VecDeque};
 use std::io;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -40,8 +40,8 @@ pub struct Server {
     pub tok: Arc<Tokenizer>,
     pub queue: Mutex<VecDeque<Request>>,
     pub stats: Mutex<Stats>,
-    /// Stories already written, by prompt.
-    pub cache: Mutex<HashMap<String, Story>>,
+    /// One slot per prompt. The first worker to need a story writes it into the slot.
+    pub cache: Mutex<HashMap<String, Arc<OnceLock<Story>>>>,
 }
 
 impl Server {
@@ -98,18 +98,17 @@ impl Server {
             // copy the Arc out: the read guard is dropped at the end of this line
             let model = Arc::clone(&self.model.read().unwrap());
             let waited = asked.elapsed();
-            // check: is the story cached? (the lock is dropped at the end of the line)
-            let hit = self.cache.lock().unwrap().get(&req.prompt).cloned();
-            let fresh = hit.is_none();
-            let story = if let Some(story) = hit {
-                story
-            } else {
-                // act: write it and store it. Another worker may be writing it too.
-                let new = generate(&model, tok, &req.prompt, req.steps, &math::matmul);
+            // check and act under one lock: find this prompt's slot, or make it
+            let slot = {
                 let mut cache = self.cache.lock().unwrap();
-                cache.insert(req.prompt.clone(), new.clone());
-                new
-            };
+                Arc::clone(cache.entry(req.prompt.clone()).or_default())
+            }; // the map lock is dropped here, before any matmul
+            let mut fresh = false;
+            // the first worker writes the story; the others wait here until it is ready
+            let story = slot.get_or_init(|| {
+                fresh = true;
+                generate(&model, tok, &req.prompt, req.steps, &math::matmul)
+            });
             let first = story.text.lines().next().unwrap_or("").to_string();
             let mut stats = self.stats();
             stats.last = first;

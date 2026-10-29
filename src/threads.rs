@@ -1,7 +1,7 @@
 //! Part 1: the same engine, on many threads.
 
 use crate::generate::{Story, generate};
-use crate::math;
+use crate::math::{self, dot};
 use crate::model::Weights;
 use crate::tokenizer::Tokenizer;
 use std::sync::Arc;
@@ -37,5 +37,22 @@ pub fn matmul_scoped(out: &mut [f32], x: &[f32], w: &[f32], threads: usize) {
         for (out, w) in out.chunks_mut(rows).zip(w.chunks(rows * x.len())) {
             s.spawn(move || math::matmul(out, x, w));
         }
+    });
+}
+
+/// The other way to split W · x: by inputs. Each thread sums one half of every row.
+pub fn matmul_halves(out: &mut [f32], x: &[f32], w: &[f32]) {
+    let (n, half) = (x.len(), x.len() / 2);
+    thread::scope(|s| {
+        s.spawn(|| {
+            for (i, o) in out.iter_mut().enumerate() {
+                *o = dot(&w[i * n..][..half], &x[..half]);
+            }
+        });
+        s.spawn(|| {
+            for (i, o) in out.iter_mut().enumerate() {
+                *o += dot(&w[i * n + half..][..n - half], &x[half..]);
+            }
+        });
     });
 }

@@ -90,7 +90,8 @@ impl Server {
             let next = self.queue.lock().unwrap().pop_front(); // guard dropped here
             let Some(req) = next else { break };
             let asked = Instant::now();
-            let model = self.model.read().unwrap();
+            // copy the Arc out: the read guard is dropped at the end of this line
+            let model = Arc::clone(&self.model.read().unwrap());
             let waited = asked.elapsed();
             let story = generate(&model, tok, &req.prompt, req.steps, &math::matmul);
             let first = story.text.lines().next().unwrap_or("").to_string();

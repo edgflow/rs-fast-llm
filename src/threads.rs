@@ -28,3 +28,14 @@ pub fn serve(
         .map(|h| h.join().expect("a story panicked"));
     stories.collect()
 }
+
+/// `thread::scope`: one matmul, split by rows. The threads borrow `x` and the matrix,
+/// and each one writes its own rows of `out`.
+pub fn matmul_scoped(out: &mut [f32], x: &[f32], w: &[f32], threads: usize) {
+    let rows = out.len().div_ceil(threads).max(1);
+    thread::scope(|s| {
+        for (out, w) in out.chunks_mut(rows).zip(w.chunks(rows * x.len())) {
+            s.spawn(move || math::matmul(out, x, w));
+        }
+    });
+}

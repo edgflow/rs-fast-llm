@@ -12,8 +12,8 @@ static BUSY: AtomicU64 = AtomicU64::new(0); // the round the worker's hand is up
 
 /// Raise my hand for this round, then look at the other hand. Down: I go in.
 fn go_in(mine: &AtomicU64, theirs: &AtomicU64, round: u64) -> bool {
-    mine.store(round, Release);
-    theirs.load(Acquire) < round
+    mine.store(round, SeqCst); // one order of all SeqCst operations, for every thread
+    theirs.load(SeqCst) < round
 }
 
 /// Every round: wait for the other side to catch up, then try to go in.

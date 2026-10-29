@@ -74,7 +74,9 @@ impl Server {
     /// One worker: take the next request, write its story, repeat until none are left.
     fn worker(&self, me: usize) {
         let (model, tok) = (&self.model, &self.tok);
-        while let Some(req) = self.queue.lock().unwrap().pop_front() {
+        loop {
+            let next = self.queue.lock().unwrap().pop_front(); // guard dropped here
+            let Some(req) = next else { break };
             let story = generate(model, tok, &req.prompt, req.steps, &math::matmul);
             let mut stats = self.stats.lock().unwrap();
             stats.done += 1;

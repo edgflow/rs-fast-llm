@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use llm::generate::{Story, generate};
 use llm::math;
 use llm::model::Weights;
-use llm::server::{Server, requests};
+use llm::server::{Request, Server, requests};
 use llm::threads::{matmul_halves, matmul_scoped, serve};
 use llm::tokenizer::Tokenizer;
 use std::sync::Arc;
@@ -46,6 +46,9 @@ enum Cmd {
         requests: usize,
         #[arg(long, default_value_t = 64)]
         steps: usize,
+        /// Add one request that asks for 0 tokens
+        #[arg(long)]
+        bad: bool,
     },
     /// Write a story for each of several users at the same time
     Serve {
@@ -102,8 +105,21 @@ fn main() {
             workers,
             requests: n,
             steps,
+            bad,
         } => {
-            let server = Server::new(w, tok, requests(&PROMPTS, n, steps), workers);
+            let mut reqs = requests(&PROMPTS, n, steps);
+            if bad {
+                let prompt = "Tom found a box".to_string();
+                reqs.insert(
+                    3,
+                    Request {
+                        id: n,
+                        prompt,
+                        steps: 0,
+                    },
+                );
+            }
+            let server = Server::new(w, tok, reqs, workers);
             let took = server.run(workers);
             let s = server.stats.lock().unwrap();
             let rate = s.tokens as f64 / took.as_secs_f64();

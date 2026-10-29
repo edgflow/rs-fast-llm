@@ -25,6 +25,8 @@ pub struct Stats {
     pub tokens: usize,
     /// How many requests each worker served.
     pub per_worker: Vec<usize>,
+    /// The first line of the last story, for the dashboard.
+    pub last: String,
 }
 
 pub struct Server {
@@ -79,6 +81,7 @@ impl Server {
             let Some(req) = next else { break };
             let story = generate(model, tok, &req.prompt, req.steps, &math::matmul);
             let mut stats = self.stats.lock().unwrap();
+            stats.last = story.text.lines().next().unwrap().to_string();
             stats.done += 1;
             stats.tokens += story.tokens;
             stats.per_worker[me] += 1;

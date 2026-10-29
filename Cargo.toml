@@ -1,0 +1,20 @@
+[package]
+name = "fast-llm"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "A small LLM inference engine in Rust that gets faster in every part of the Rust concurrency series"
+license = "MIT"
+
+[lib]
+name = "llm"
+
+[[bin]]
+name = "llm"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.6.7", features = ["derive"] }
+
+[profile.release]
+debug = "line-tables-only"

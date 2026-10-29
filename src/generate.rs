@@ -35,7 +35,7 @@ pub fn generate(
     generate_live(w, tok, prompt, steps, matmul, &Live::default())
 }
 
-/// The same, adding every token it writes to `live.tokens` for the dashboard.
+/// The same, adding every token it writes to `live.tokens`, until `live.stop`.
 pub fn generate_live(
     w: &Weights,
     tok: &Tokenizer,
@@ -49,6 +49,9 @@ pub fn generate_live(
     let mut state = State::new(&w.config);
     let (mut text, mut token, mut written) = (String::new(), prompt[0], 0);
     for pos in 0..steps.min(w.config.seq_len) {
+        if live.stop.load(Relaxed) {
+            break; // the user pressed stop
+        }
         forward(w, &mut state, token, pos, matmul);
         let next = match prompt.get(pos + 1) {
             Some(&t) => t, // still reading the prompt

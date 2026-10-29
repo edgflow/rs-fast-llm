@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use llm::generate::{Story, generate};
+use llm::generate::{Story, generate, generate_live};
 use llm::live::Live;
 use llm::math;
 use llm::model::Weights;
@@ -57,6 +57,11 @@ enum Cmd {
         /// How many different prompts the requests use
         #[arg(long, default_value_t = 12)]
         prompts: usize,
+    },
+    /// Write a story, and press stop after a while
+    Stop {
+        #[arg(long, default_value_t = 300)]
+        after: u64,
     },
     /// Write a story for each of several users at the same time
     Serve {
@@ -158,6 +163,22 @@ fn main() {
             println!(
                 "stories written: {} for {prompts} different prompts",
                 s.generated
+            );
+        }
+        Cmd::Stop { after } => {
+            let live = Live::default();
+            let story = thread::scope(|s| {
+                s.spawn(|| {
+                    thread::sleep(Duration::from_millis(after));
+                    live.stop.store(true, Relaxed); // the stop button
+                });
+                generate_live(&w, &tok, PROMPTS[0], 256, &math::matmul, &live)
+            });
+            let late = story.took.saturating_sub(Duration::from_millis(after));
+            println!("\n{}…\n", story.text);
+            println!(
+                "stopped after {} tokens, {late:.2?} after the button",
+                story.tokens
             );
         }
         Cmd::Serve { users, steps } => {

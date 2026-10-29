@@ -4,5 +4,6 @@ pub mod forward;
 pub mod generate;
 pub mod math;
 pub mod model;
+pub mod server;
 pub mod threads;
 pub mod tokenizer;

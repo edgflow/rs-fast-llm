@@ -11,6 +11,9 @@ the same story: every faster version must write exactly the same text.
 ```
 models/get.sh                                   # the model (58 MB) and the tokenizer
 cargo run --release -- generate "Once upon a time"
+cargo run --release -- generate --mode scoped --threads 4   # one story, matmuls split
+cargo run --release -- serve --users 4                       # four stories at once
+cargo run --release -- bench
 ```
 
 Each part of the series is a range of git tags: `p1-step-0` … for part 1, `p2-step-0` … for part 2, and so on.
@@ -18,7 +21,7 @@ Check out a tag to get the code exactly as it is at that moment of the video.
 
 | Part | Topic | Tags |
 |---|---|---|
-| 1 | Threads: `std::thread`, the thread lifecycle, `Send` and `Sync` (`Rc` vs `Arc`), scoped threads, data races | `p1-step-*` |
+| 1 | Threads: `std::thread`, the thread lifecycle, `Send` and `Sync` (`Rc` vs `Arc`), scoped threads, data races | `p1-step-0` … `p1-step-9` |
 
 The model files are not in the repo: `models/get.sh` downloads them from
 [karpathy/tinyllamas](https://huggingface.co/karpathy/tinyllamas) and [karpathy/llama2.c](https://github.com/karpathy/llama2.c).

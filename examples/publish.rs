@@ -1,7 +1,7 @@
 //! A loader writes new weights, then raises a ready flag with their version. Seven
 //! readers look at the flag, then at the weights. Can a reader see the flag first?
 
-use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicU64, Ordering::*};
 use std::thread;
 
 const VERSIONS: u64 = 10_000_000;
@@ -13,13 +13,13 @@ static READY: AtomicU64 = AtomicU64::new(0); // the version the loader says is r
 /// The loader: write the weights, then say they are ready.
 fn publish(version: u64) {
     WEIGHTS.store(version, Relaxed);
-    READY.store(version, Relaxed);
+    READY.store(version, Release); // everything written before this goes with it
 }
 
 /// A reader: look at the flag, then at the weights. Weights older than the flag mean
 /// the reader saw the flag first.
 fn saw_old_weights() -> bool {
-    let ready = READY.load(Relaxed);
+    let ready = READY.load(Acquire); // sees everything written before that store
     WEIGHTS.load(Relaxed) < ready
 }
 

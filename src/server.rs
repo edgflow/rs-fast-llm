@@ -1,11 +1,11 @@
 //! Part 2: one engine, many users. Everything the workers share lives in one `Server`
 //! behind an `Arc`, and everything they change sits behind a lock.
 
-use crate::generate::generate;
+use crate::generate::{Story, generate};
 use crate::math;
 use crate::model::Weights;
 use crate::tokenizer::Tokenizer;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 use std::thread;
@@ -30,6 +30,8 @@ pub struct Stats {
     pub last: String,
     /// The longest a request waited for the model.
     pub max_wait: Duration,
+    /// Stories actually written (the rest came from the cache).
+    pub generated: usize,
 }
 
 pub struct Server {
@@ -38,6 +40,8 @@ pub struct Server {
     pub tok: Arc<Tokenizer>,
     pub queue: Mutex<VecDeque<Request>>,
     pub stats: Mutex<Stats>,
+    /// Stories already written, by prompt.
+    pub cache: Mutex<HashMap<String, Story>>,
 }
 
 impl Server {
@@ -56,6 +60,7 @@ impl Server {
             tok: Arc::new(tok),
             queue: Mutex::new(requests.into()),
             stats: Mutex::new(stats),
+            cache: Mutex::new(HashMap::new()),
         })
     }
 
@@ -93,7 +98,18 @@ impl Server {
             // copy the Arc out: the read guard is dropped at the end of this line
             let model = Arc::clone(&self.model.read().unwrap());
             let waited = asked.elapsed();
-            let story = generate(&model, tok, &req.prompt, req.steps, &math::matmul);
+            // check: is the story cached? (the lock is dropped at the end of the line)
+            let hit = self.cache.lock().unwrap().get(&req.prompt).cloned();
+            let fresh = hit.is_none();
+            let story = if let Some(story) = hit {
+                story
+            } else {
+                // act: write it and store it. Another worker may be writing it too.
+                let new = generate(&model, tok, &req.prompt, req.steps, &math::matmul);
+                let mut cache = self.cache.lock().unwrap();
+                cache.insert(req.prompt.clone(), new.clone());
+                new
+            };
             let first = story.text.lines().next().unwrap_or("").to_string();
             let mut stats = self.stats();
             stats.last = first;
@@ -101,6 +117,7 @@ impl Server {
             stats.tokens += story.tokens;
             stats.per_worker[me] += 1;
             stats.max_wait = stats.max_wait.max(waited);
+            stats.generated += fresh as usize;
         }
     }
 

@@ -52,6 +52,9 @@ enum Cmd {
         /// Reload the model this many milliseconds after the start
         #[arg(long)]
         reload_after: Option<u64>,
+        /// How many different prompts the requests use
+        #[arg(long, default_value_t = 12)]
+        prompts: usize,
     },
     /// Write a story for each of several users at the same time
     Serve {
@@ -110,8 +113,9 @@ fn main() {
             steps,
             bad,
             reload_after,
+            prompts,
         } => {
-            let mut reqs = requests(&PROMPTS, n, steps);
+            let mut reqs = requests(&PROMPTS[..prompts], n, steps);
             if bad {
                 let prompt = "Tom found a box".to_string();
                 reqs.insert(
@@ -143,6 +147,10 @@ fn main() {
             );
             println!("requests per worker: {:?}", s.per_worker);
             println!("longest wait for the model: {:.2?}", s.max_wait);
+            println!(
+                "stories written: {} for {prompts} different prompts",
+                s.generated
+            );
         }
         Cmd::Serve { users, steps } => {
             let prompts = PROMPTS.iter().cycle().take(users).map(|p| p.to_string());

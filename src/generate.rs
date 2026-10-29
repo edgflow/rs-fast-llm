@@ -7,6 +7,7 @@ use crate::tokenizer::{BOS, Tokenizer};
 use std::time::{Duration, Instant};
 
 /// A finished story.
+#[derive(Clone, Debug)]
 pub struct Story {
     pub text: String,
     /// The tokens the model wrote (the prompt's tokens don't count).

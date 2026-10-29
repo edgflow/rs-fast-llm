@@ -14,6 +14,8 @@ cargo run --release -- generate "Once upon a time"
 cargo run --release -- generate --mode scoped --threads 4   # one story, matmuls split
 cargo run --release -- serve --users 4                       # four stories at once
 cargo run --release -- bench
+cargo run --release -- queue --workers 8 --prompts 2  # a request queue and a prompt cache
+cargo run --release --example deadlock
 ```
 
 Each part of the series is a range of git tags: `p1-step-0` … for part 1, `p2-step-0` … for part 2, and so on.
@@ -22,6 +24,7 @@ Check out a tag to get the code exactly as it is at that moment of the video.
 | Part | Topic | Tags |
 |---|---|---|
 | 1 | Threads: `std::thread`, the thread lifecycle, `Send` and `Sync` (`Rc` vs `Arc`), scoped threads, data races | `p1-step-0` … `p1-step-9` |
+| 2 | Shared state: `Arc<Mutex>`, guard lifetimes and starvation, poisoning, `RwLock` and hot reload, a check-then-act race and `OnceLock`, deadlocks | `p2-step-0` … `p2-step-13` |
 
 The model files are not in the repo: `models/get.sh` downloads them from
 [karpathy/tinyllamas](https://huggingface.co/karpathy/tinyllamas) and [karpathy/llama2.c](https://github.com/karpathy/llama2.c).

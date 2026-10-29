@@ -6,7 +6,8 @@ use crate::math;
 use crate::model::Weights;
 use crate::tokenizer::Tokenizer;
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::io;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -27,10 +28,13 @@ pub struct Stats {
     pub per_worker: Vec<usize>,
     /// The first line of the last story, for the dashboard.
     pub last: String,
+    /// The longest a request waited for the model.
+    pub max_wait: Duration,
 }
 
 pub struct Server {
-    pub model: Arc<Weights>,
+    /// The weights every worker reads; `reload` swaps in new ones.
+    pub model: RwLock<Arc<Weights>>,
     pub tok: Arc<Tokenizer>,
     pub queue: Mutex<VecDeque<Request>>,
     pub stats: Mutex<Stats>,
@@ -48,7 +52,7 @@ impl Server {
             ..Stats::default()
         };
         Arc::new(Server {
-            model: Arc::new(model),
+            model: RwLock::new(Arc::new(model)),
             tok: Arc::new(tok),
             queue: Mutex::new(requests.into()),
             stats: Mutex::new(stats),
@@ -81,18 +85,33 @@ impl Server {
 
     /// One worker: take the next request, write its story, repeat until none are left.
     fn worker(&self, me: usize) {
-        let (model, tok) = (&self.model, &self.tok);
+        let tok = &self.tok;
         loop {
             let next = self.queue.lock().unwrap().pop_front(); // guard dropped here
             let Some(req) = next else { break };
-            let story = generate(model, tok, &req.prompt, req.steps, &math::matmul);
+            let asked = Instant::now();
+            let model = self.model.read().unwrap();
+            let waited = asked.elapsed();
+            let story = generate(&model, tok, &req.prompt, req.steps, &math::matmul);
             let first = story.text.lines().next().unwrap_or("").to_string();
             let mut stats = self.stats();
             stats.last = first;
             stats.done += 1;
             stats.tokens += story.tokens;
             stats.per_worker[me] += 1;
+            stats.max_wait = stats.max_wait.max(waited);
         }
+    }
+
+    /// Swap in new weights while the workers keep serving. Returns how long the write
+    /// lock took, and how many stories still use the old weights.
+    pub fn reload(&self, path: &str) -> io::Result<(Duration, usize)> {
+        let fresh = Arc::new(Weights::load(path)?);
+        let asked = Instant::now();
+        let mut model = self.model.write().unwrap();
+        let old = std::mem::replace(&mut *model, fresh);
+        drop(model);
+        Ok((asked.elapsed(), Arc::strong_count(&old) - 1))
     }
 }
 

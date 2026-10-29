@@ -49,6 +49,9 @@ enum Cmd {
         /// Add one request that asks for 0 tokens
         #[arg(long)]
         bad: bool,
+        /// Reload the model this many milliseconds after the start
+        #[arg(long)]
+        reload_after: Option<u64>,
     },
     /// Write a story for each of several users at the same time
     Serve {
@@ -106,6 +109,7 @@ fn main() {
             requests: n,
             steps,
             bad,
+            reload_after,
         } => {
             let mut reqs = requests(&PROMPTS, n, steps);
             if bad {
@@ -120,6 +124,16 @@ fn main() {
                 );
             }
             let server = Server::new(w, tok, reqs, workers);
+            if let Some(ms) = reload_after {
+                let (server, path) = (Arc::clone(&server), cli.model.clone());
+                thread::spawn(move || {
+                    thread::sleep(std::time::Duration::from_millis(ms));
+                    let (took, old) = server.reload(&path).expect("reload failed");
+                    println!(
+                        "reload in {took:.2?}, {old} stories still on the old weights"
+                    );
+                });
+            }
             let took = server.run(workers);
             let s = server.stats();
             let rate = s.tokens as f64 / took.as_secs_f64();
@@ -128,6 +142,7 @@ fn main() {
                 s.done
             );
             println!("requests per worker: {:?}", s.per_worker);
+            println!("longest wait for the model: {:.2?}", s.max_wait);
         }
         Cmd::Serve { users, steps } => {
             let prompts = PROMPTS.iter().cycle().take(users).map(|p| p.to_string());

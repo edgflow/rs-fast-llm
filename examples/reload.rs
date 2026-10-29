@@ -1,4 +1,5 @@
 //! One thread can deadlock alone: it holds a read guard and asks for the write lock.
+//! The fix: check and swap under one write guard.
 //! Run it with `cargo run --release --example reload`.
 
 use std::sync::{Arc, RwLock};
@@ -10,11 +11,11 @@ fn main() {
 
     let m = Arc::clone(&model);
     let reload = thread::spawn(move || {
-        let current = m.read().unwrap();
+        // check under the write lock: nobody can swap the model between check and act
+        let mut current = m.write().unwrap();
         if current.ends_with("v1") {
             println!("reload: {} is old, writing v2", *current);
-            // write waits until every read guard is gone, and `current` is one of them
-            *m.write().unwrap() = "stories15M v2";
+            *current = "stories15M v2";
         }
         println!("reload: done");
     });

@@ -1,9 +1,11 @@
 //! Writing a story: read the prompt, then keep feeding the model its own best guess.
 
 use crate::forward::{Matmul, State, forward};
+use crate::live::Live;
 use crate::math::argmax;
 use crate::model::Weights;
 use crate::tokenizer::{BOS, Tokenizer};
+use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Duration, Instant};
 
 /// A finished story.
@@ -30,6 +32,18 @@ pub fn generate(
     steps: usize,
     matmul: Matmul,
 ) -> Story {
+    generate_live(w, tok, prompt, steps, matmul, &Live::default())
+}
+
+/// The same, adding every token it writes to `live.tokens` for the dashboard.
+pub fn generate_live(
+    w: &Weights,
+    tok: &Tokenizer,
+    prompt: &str,
+    steps: usize,
+    matmul: Matmul,
+    live: &Live,
+) -> Story {
     let start = Instant::now();
     let prompt = tok.encode(prompt);
     let mut state = State::new(&w.config);
@@ -40,6 +54,7 @@ pub fn generate(
             Some(&t) => t, // still reading the prompt
             None => {
                 written += 1;
+                live.tokens.fetch_add(1, Relaxed); // only a count: Relaxed is enough
                 argmax(&state.logits) as u32
             }
         };

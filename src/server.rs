@@ -1,7 +1,8 @@
 //! Part 2: one engine, many users. Everything the workers share lives in one `Server`
 //! behind an `Arc`, and everything they change sits behind a lock.
 
-use crate::generate::{Story, generate};
+use crate::generate::{Story, generate_live};
+use crate::live::Live;
 use crate::math;
 use crate::model::Weights;
 use crate::tokenizer::Tokenizer;
@@ -42,6 +43,8 @@ pub struct Server {
     pub stats: Mutex<Stats>,
     /// One slot per prompt. The first worker to need a story writes it into the slot.
     pub cache: Mutex<HashMap<String, Arc<OnceLock<Story>>>>,
+    /// Counters every worker updates on every token, without a lock.
+    pub live: Live,
 }
 
 impl Server {
@@ -61,6 +64,7 @@ impl Server {
             queue: Mutex::new(requests.into()),
             stats: Mutex::new(stats),
             cache: Mutex::new(HashMap::new()),
+            live: Live::default(),
         })
     }
 
@@ -107,7 +111,8 @@ impl Server {
             // the first worker writes the story; the others wait here until it is ready
             let story = slot.get_or_init(|| {
                 fresh = true;
-                generate(&model, tok, &req.prompt, req.steps, &math::matmul)
+                let live = &self.live;
+                generate_live(&model, tok, &req.prompt, req.steps, &math::matmul, live)
             });
             let first = story.text.lines().next().unwrap_or("").to_string();
             let mut stats = self.stats();

@@ -1,13 +1,15 @@
 use clap::{Parser, Subcommand};
 use llm::generate::{Story, generate};
+use llm::live::Live;
 use llm::math;
 use llm::model::Weights;
 use llm::server::{Request, Server, requests};
 use llm::threads::{matmul_halves, matmul_scoped, serve};
 use llm::tokenizer::Tokenizer;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Parser)]
 #[command(
@@ -131,14 +133,20 @@ fn main() {
             if let Some(ms) = reload_after {
                 let (server, path) = (Arc::clone(&server), cli.model.clone());
                 thread::spawn(move || {
-                    thread::sleep(std::time::Duration::from_millis(ms));
+                    thread::sleep(Duration::from_millis(ms));
                     let (took, old) = server.reload(&path).expect("reload failed");
                     println!(
                         "reload in {took:.2?}, {old} stories still on the old weights"
                     );
                 });
             }
-            let took = server.run(workers);
+            let finished = AtomicBool::new(false);
+            let took = thread::scope(|s| {
+                s.spawn(|| dashboard(&server.live, &finished));
+                let took = server.run(workers);
+                finished.store(true, Relaxed); // the dashboard stops at its next look
+                took
+            });
             let s = server.stats();
             let rate = s.tokens as f64 / took.as_secs_f64();
             println!(
@@ -170,6 +178,14 @@ fn main() {
                 "{users} users: {tokens} tokens in {took:.2?}, {rate:.0} tokens/s"
             );
         }
+    }
+}
+
+/// Print the live token count four times a second, until the run is finished.
+fn dashboard(live: &Live, finished: &AtomicBool) {
+    while !finished.load(Relaxed) {
+        thread::sleep(Duration::from_millis(250));
+        println!("live: {} tokens so far", live.tokens.load(Relaxed));
     }
 }
 

@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use llm::generate::{Story, generate};
 use llm::math;
 use llm::model::Weights;
+use llm::server::{Server, requests};
 use llm::threads::{matmul_halves, matmul_scoped, serve};
 use llm::tokenizer::Tokenizer;
 use std::sync::Arc;
@@ -37,6 +38,15 @@ enum Cmd {
     },
     /// Tokens per second on 1 to 12 threads: one story split, or many stories at once
     Bench,
+    /// Serve queued requests with a pool of worker threads
+    Queue {
+        #[arg(long, default_value_t = 8)]
+        workers: usize,
+        #[arg(long, default_value_t = 16)]
+        requests: usize,
+        #[arg(long, default_value_t = 64)]
+        steps: usize,
+    },
     /// Write a story for each of several users at the same time
     Serve {
         #[arg(long, default_value_t = 4)]
@@ -88,6 +98,21 @@ fn main() {
             report(&mode, threads, &story);
         }
         Cmd::Bench => bench(Arc::new(w), Arc::new(tok)),
+        Cmd::Queue {
+            workers,
+            requests: n,
+            steps,
+        } => {
+            let server = Server::new(w, tok, requests(&PROMPTS, n, steps), workers);
+            let took = server.run(workers);
+            let s = server.stats.lock().unwrap();
+            let rate = s.tokens as f64 / took.as_secs_f64();
+            println!(
+                "{} requests on {workers} workers in {took:.2?}: {rate:.0} tokens/s",
+                s.done
+            );
+            println!("requests per worker: {:?}", s.per_worker);
+        }
         Cmd::Serve { users, steps } => {
             let prompts = PROMPTS.iter().cycle().take(users).map(|p| p.to_string());
             let t = Instant::now();

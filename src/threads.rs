@@ -4,6 +4,7 @@ use crate::generate::{Story, generate};
 use crate::math::{self, dot};
 use crate::model::Weights;
 use crate::tokenizer::Tokenizer;
+use std::ops::Range;
 use std::sync::Arc;
 use std::thread;
 
@@ -40,19 +41,21 @@ pub fn matmul_scoped(out: &mut [f32], x: &[f32], w: &[f32], threads: usize) {
     });
 }
 
-/// The other way to split W · x: by inputs. Each thread sums one half of every row.
+/// The other way to split W · x: by inputs. Each thread sums one half of every row into
+/// a vector of its own, and the halves are added after the join: a reduction.
 pub fn matmul_halves(out: &mut [f32], x: &[f32], w: &[f32]) {
     let (n, half) = (x.len(), x.len() / 2);
-    thread::scope(|s| {
-        s.spawn(|| {
-            for (i, o) in out.iter_mut().enumerate() {
-                *o = dot(&w[i * n..][..half], &x[..half]);
-            }
-        });
-        s.spawn(|| {
-            for (i, o) in out.iter_mut().enumerate() {
-                *o += dot(&w[i * n + half..][..n - half], &x[half..]);
-            }
-        });
+    let part = |cols: Range<usize>| -> Vec<f32> {
+        let rows = w.chunks_exact(n);
+        rows.map(|row| dot(&row[cols.clone()], &x[cols.clone()]))
+            .collect()
+    };
+    let (a, b) = thread::scope(|s| {
+        let a = s.spawn(|| part(0..half));
+        let b = s.spawn(|| part(half..n));
+        (a.join().unwrap(), b.join().unwrap())
     });
+    for ((o, a), b) in out.iter_mut().zip(a).zip(b) {
+        *o = a + b;
+    }
 }

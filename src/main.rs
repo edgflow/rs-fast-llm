@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use llm::generate::{Story, generate};
 use llm::math;
 use llm::model::Weights;
-use llm::threads::{matmul_scoped, serve};
+use llm::threads::{matmul_halves, matmul_scoped, serve};
 use llm::tokenizer::Tokenizer;
 use std::sync::Arc;
 use std::time::Instant;
@@ -72,6 +72,7 @@ fn main() {
         } => {
             let story = match mode.as_str() {
                 "seq" => generate(&w, &tok, &prompt, steps, &math::matmul),
+                "halves" => generate(&w, &tok, &prompt, steps, &matmul_halves),
                 "scoped" => {
                     let matmul = |o: &mut [f32], x: &[f32], m: &[f32]| {
                         matmul_scoped(o, x, m, threads)

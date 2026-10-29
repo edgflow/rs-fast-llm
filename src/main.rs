@@ -121,7 +121,7 @@ fn main() {
             }
             let server = Server::new(w, tok, reqs, workers);
             let took = server.run(workers);
-            let s = server.stats.lock().unwrap();
+            let s = server.stats();
             let rate = s.tokens as f64 / took.as_secs_f64();
             println!(
                 "{} requests on {workers} workers in {took:.2?}: {rate:.0} tokens/s",

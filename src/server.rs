@@ -6,7 +6,7 @@ use crate::math;
 use crate::model::Weights;
 use crate::tokenizer::Tokenizer;
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -73,6 +73,12 @@ impl Server {
         start.elapsed()
     }
 
+    /// The stats, even if a worker panicked while holding the lock: every update is a
+    /// few plain assignments, so a poisoned lock still holds consistent numbers.
+    pub fn stats(&self) -> MutexGuard<'_, Stats> {
+        self.stats.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// One worker: take the next request, write its story, repeat until none are left.
     fn worker(&self, me: usize) {
         let (model, tok) = (&self.model, &self.tok);
@@ -80,8 +86,9 @@ impl Server {
             let next = self.queue.lock().unwrap().pop_front(); // guard dropped here
             let Some(req) = next else { break };
             let story = generate(model, tok, &req.prompt, req.steps, &math::matmul);
-            let mut stats = self.stats.lock().unwrap();
-            stats.last = story.text.lines().next().unwrap().to_string();
+            let first = story.text.lines().next().unwrap_or("").to_string();
+            let mut stats = self.stats();
+            stats.last = first;
             stats.done += 1;
             stats.tokens += story.tokens;
             stats.per_worker[me] += 1;

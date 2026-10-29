@@ -5,6 +5,7 @@ use llm::model::Weights;
 use llm::threads::{matmul_halves, matmul_scoped, serve};
 use llm::tokenizer::Tokenizer;
 use std::sync::Arc;
+use std::thread;
 use std::time::Instant;
 
 #[derive(Parser)]
@@ -34,6 +35,8 @@ enum Cmd {
         #[arg(long, default_value_t = 1)]
         threads: usize,
     },
+    /// Tokens per second on 1 to 12 threads: one story split, or many stories at once
+    Bench,
     /// Write a story for each of several users at the same time
     Serve {
         #[arg(long, default_value_t = 4)]
@@ -84,6 +87,7 @@ fn main() {
             println!("\n{}\n", story.text);
             report(&mode, threads, &story);
         }
+        Cmd::Bench => bench(Arc::new(w), Arc::new(tok)),
         Cmd::Serve { users, steps } => {
             let prompts = PROMPTS.iter().cycle().take(users).map(|p| p.to_string());
             let t = Instant::now();
@@ -111,4 +115,39 @@ fn report(mode: &str, threads: usize, s: &Story) {
         "{mode} on {threads} thread(s): {} tokens in {:.2?}, {rate:.0} tokens/s",
         s.tokens, s.took
     );
+}
+
+/// The best of three runs: one story with every matmul split across n threads, and n
+/// stories at once with one thread each. One thread is the plain engine in both.
+fn bench(w: Arc<Weights>, tok: Arc<Tokenizer>) {
+    let cores = thread::available_parallelism().map_or(1, |n| n.get());
+    println!("this machine runs {cores} threads at once\n");
+    println!("         one story, split     n stories at once");
+    println!("threads  tokens/s  speedup    tokens/s  speedup");
+    let (mut one, mut base) = (0.0, 0.0);
+    for n in [1, 2, 4, 8, 12] {
+        let split = best_of_3(|| {
+            let matmul = |o: &mut [f32], x: &[f32], m: &[f32]| match n {
+                1 => math::matmul(o, x, m),
+                _ => matmul_scoped(o, x, m, n),
+            };
+            generate(&w, &tok, PROMPTS[0], 256, &matmul).tokens_per_sec()
+        });
+        let many = best_of_3(|| {
+            let prompts = PROMPTS[..n].iter().map(|p| p.to_string()).collect();
+            let t = Instant::now();
+            let stories = serve(Arc::clone(&w), Arc::clone(&tok), prompts, 256);
+            let tokens: usize = stories.iter().map(|s| s.tokens).sum();
+            tokens as f64 / t.elapsed().as_secs_f64()
+        });
+        if n == 1 {
+            (one, base) = (split, many);
+        }
+        let (a, b) = (split / one, many / base);
+        println!("{n:>7}  {split:>8.0}  {a:>6.1}x    {many:>8.0}  {b:>6.1}x");
+    }
+}
+
+fn best_of_3(run: impl Fn() -> f64) -> f64 {
+    (0..3).map(|_| run()).fold(0.0, f64::max)
 }

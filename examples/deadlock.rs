@@ -1,4 +1,4 @@
-//! Two threads, two locks, taken in opposite orders: a deadlock, caught by a watchdog.
+//! Two threads, two locks. In opposite orders they deadlock; in one order they can't.
 //! Run it with `cargo run --release --example deadlock`.
 
 use std::collections::HashMap;
@@ -36,13 +36,13 @@ fn main() {
         println!("worker: done");
     });
 
-    // the status page reads the count, then the cache size: stats, then cache
+    // the status page takes the locks in the same order: cache, then stats
     let s = Arc::clone(&server);
     let status = thread::spawn(move || {
         thread::sleep(Duration::from_millis(10));
-        let stats = take("status", "stats", &s.stats);
-        thread::sleep(Duration::from_millis(100));
         let cache = take("status", "cache", &s.cache);
+        thread::sleep(Duration::from_millis(100));
+        let stats = take("status", "stats", &s.stats);
         println!("status: {} done, {} cached", *stats, cache.len());
     });
 

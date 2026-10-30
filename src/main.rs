@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use llm::chat::Chat;
 use llm::generate::{Story, generate, generate_each, generate_live};
 use llm::live::Live;
 use llm::math;
@@ -71,6 +72,15 @@ enum Cmd {
     Stream {
         #[arg(default_value = "Once upon a time")]
         prompt: String,
+    },
+    /// Many users ask the server at once, and read their stories as they stream in
+    Chat {
+        #[arg(long, default_value_t = 16)]
+        users: usize,
+        #[arg(long, default_value_t = 8)]
+        workers: usize,
+        #[arg(long, default_value_t = 64)]
+        steps: usize,
     },
     /// Write a story for each of several users at the same time
     Serve {
@@ -224,6 +234,40 @@ fn main() {
             println!(
                 "\n\nfirst piece after {first:.2?}, {pieces} pieces in {took:.2?}"
             );
+        }
+        Cmd::Chat {
+            users,
+            workers,
+            steps,
+        } => {
+            let chat = Chat::start(Arc::new(w), Arc::new(tok), workers);
+            let start = Instant::now();
+            let mut waits: Vec<Duration> = thread::scope(|s| {
+                let chat = &chat;
+                let users: Vec<_> = (0..users)
+                    .map(|u| {
+                        s.spawn(move || {
+                            let pieces = chat.ask(PROMPTS[u % PROMPTS.len()], steps);
+                            let asked = Instant::now();
+                            let mut first = None;
+                            for _piece in pieces {
+                                first.get_or_insert(asked.elapsed());
+                            }
+                            first.unwrap_or_default()
+                        })
+                    })
+                    .collect();
+                users.into_iter().map(|u| u.join().unwrap()).collect()
+            });
+            let took = start.elapsed();
+            let served = chat.shutdown();
+            waits.sort();
+            let ms: Vec<u128> = waits.iter().map(|d| d.as_millis()).collect();
+            println!(
+                "{users} users, {workers} workers: every story streamed in {took:.2?}"
+            );
+            println!("first piece after, in ms: {ms:?}");
+            println!("requests per worker: {served:?}");
         }
         Cmd::Serve { users, steps } => {
             let prompts = PROMPTS.iter().cycle().take(users).map(|p| p.to_string());

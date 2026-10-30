@@ -1,5 +1,6 @@
 //! A small LLM inference engine, made faster in every part of the series.
 
+pub mod budget;
 pub mod forward;
 pub mod generate;
 pub mod live;

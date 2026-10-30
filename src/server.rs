@@ -1,6 +1,7 @@
 //! Part 2: one engine, many users. Everything the workers share lives in one `Server`
 //! behind an `Arc`, and everything they change sits behind a lock.
 
+use crate::budget::Budget;
 use crate::generate::{Story, generate_live};
 use crate::live::Live;
 use crate::math;
@@ -33,6 +34,8 @@ pub struct Stats {
     pub max_wait: Duration,
     /// Stories actually written (the rest came from the cache).
     pub generated: usize,
+    /// Requests turned away: the budget had too few tokens left for them.
+    pub rejected: usize,
 }
 
 pub struct Server {
@@ -45,6 +48,8 @@ pub struct Server {
     pub cache: Mutex<HashMap<String, Arc<OnceLock<Story>>>>,
     /// Counters every worker updates on every token, without a lock.
     pub live: Live,
+    /// Tokens every user shares. Unlimited until someone refills it with a limit.
+    pub budget: Budget,
 }
 
 impl Server {
@@ -65,6 +70,7 @@ impl Server {
             stats: Mutex::new(stats),
             cache: Mutex::new(HashMap::new()),
             live: Live::default(),
+            budget: Budget::new(usize::MAX),
         })
     }
 
@@ -98,6 +104,10 @@ impl Server {
         loop {
             let next = self.queue.lock().unwrap().pop_front(); // guard dropped here
             let Some(req) = next else { break };
+            if !self.budget.try_take(req.steps) {
+                self.stats().rejected += 1; // over budget: this user gets an error, not a story
+                continue;
+            }
             let asked = Instant::now();
             // copy the Arc out: the read guard is dropped at the end of this line
             let model = Arc::clone(&self.model.read().unwrap());

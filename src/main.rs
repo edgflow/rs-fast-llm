@@ -57,6 +57,9 @@ enum Cmd {
         /// How many different prompts the requests use
         #[arg(long, default_value_t = 12)]
         prompts: usize,
+        /// Tokens all users may write together
+        #[arg(long)]
+        budget: Option<usize>,
     },
     /// Write a story, and press stop after a while
     Stop {
@@ -121,6 +124,7 @@ fn main() {
             bad,
             reload_after,
             prompts,
+            budget,
         } => {
             let mut reqs = requests(&PROMPTS[..prompts], n, steps);
             if bad {
@@ -135,6 +139,9 @@ fn main() {
                 );
             }
             let server = Server::new(w, tok, reqs, workers);
+            if let Some(tokens) = budget {
+                server.budget.refill(tokens);
+            }
             if let Some(ms) = reload_after {
                 let (server, path) = (Arc::clone(&server), cli.model.clone());
                 thread::spawn(move || {
@@ -164,6 +171,10 @@ fn main() {
                 "stories written: {} for {prompts} different prompts",
                 s.generated
             );
+            if budget.is_some() {
+                let left = server.budget.left();
+                println!("over budget: {} requests, {left} tokens left", s.rejected);
+            }
         }
         Cmd::Stop { after } => {
             let live = Live::default();

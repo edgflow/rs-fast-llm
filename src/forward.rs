@@ -5,7 +5,8 @@ use crate::math::{dot, rmsnorm, softmax};
 use crate::model::{Config, Weights};
 
 /// How to multiply a matrix by a vector: one thread, or many (part 1 adds the others).
-pub type Matmul<'a> = &'a dyn Fn(&mut [f32], &[f32], &[f32]);
+/// `'w` is how long the weights live: a pool's jobs need weights that live forever.
+pub type Matmul<'a, 'w> = &'a dyn Fn(&mut [f32], &[f32], &'w [f32]);
 
 /// Everything that changes while one story is written: the activations, and the KV
 /// cache (the keys and values of every earlier token, so they are never recomputed).
@@ -41,7 +42,13 @@ impl State {
 }
 
 /// Run `token` at position `pos` through every layer; the scores land in `s.logits`.
-pub fn forward(w: &Weights, s: &mut State, token: u32, pos: usize, matmul: Matmul) {
+pub fn forward<'w>(
+    w: &'w Weights,
+    s: &mut State,
+    token: u32,
+    pos: usize,
+    matmul: Matmul<'_, 'w>,
+) {
     let c = &w.config;
     let (dim, kv_dim, hs) = (c.dim, c.kv_dim(), c.head_size());
     s.x.copy_from_slice(&w.embedding[token as usize * dim..][..dim]);

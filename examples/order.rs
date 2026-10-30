@@ -6,7 +6,7 @@ use llm::model::Weights;
 use llm::threads::{matmul_halves, matmul_scoped};
 
 /// The scores of five steps of the model, with this matmul.
-fn scores(w: &Weights, matmul: Matmul) -> Vec<f32> {
+fn scores<'w>(w: &'w Weights, matmul: Matmul<'_, 'w>) -> Vec<f32> {
     let mut s = State::new(&w.config);
     let mut all = Vec::new();
     for pos in 0..5 {

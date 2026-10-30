@@ -25,23 +25,23 @@ impl Story {
 
 /// Up to `steps` tokens, prompt included. Greedy: always the most likely next token, so
 /// the same prompt always gives the same story.
-pub fn generate(
-    w: &Weights,
+pub fn generate<'w>(
+    w: &'w Weights,
     tok: &Tokenizer,
     prompt: &str,
     steps: usize,
-    matmul: Matmul,
+    matmul: Matmul<'_, 'w>,
 ) -> Story {
     generate_live(w, tok, prompt, steps, matmul, &Live::default())
 }
 
 /// The same, adding every token it writes to `live.tokens`, until `live.stop`.
-pub fn generate_live(
-    w: &Weights,
+pub fn generate_live<'w>(
+    w: &'w Weights,
     tok: &Tokenizer,
     prompt: &str,
     steps: usize,
-    matmul: Matmul,
+    matmul: Matmul<'_, 'w>,
     live: &Live,
 ) -> Story {
     generate_each(w, tok, prompt, steps, matmul, live, &mut |_| true)
@@ -49,12 +49,12 @@ pub fn generate_live(
 
 /// Part 5: the same, handing every piece of text to `each` as soon as it is written.
 /// `each` returns false when nobody is listening any more, and the story stops there.
-pub fn generate_each(
-    w: &Weights,
+pub fn generate_each<'w>(
+    w: &'w Weights,
     tok: &Tokenizer,
     prompt: &str,
     steps: usize,
-    matmul: Matmul,
+    matmul: Matmul<'_, 'w>,
     live: &Live,
     each: &mut dyn FnMut(&str) -> bool,
 ) -> Story {

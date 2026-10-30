@@ -1,10 +1,10 @@
-//! A lock built from one atomic: a spinlock. Eight threads take it as often as they can
-//! for one second. Does every thread get its turn?
+//! Two locks built from atomics: a spinlock and a ticket lock. Eight threads take each
+//! one as often as they can for one second. Does every thread get its turn?
 
 use std::cell::UnsafeCell;
 use std::hint::spin_loop;
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicBool, Ordering::*};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::*};
 use std::thread;
 use std::time::Duration;
 
@@ -63,6 +63,60 @@ impl<T> Drop for SpinGuard<'_, T> {
     }
 }
 
+/// A ticket lock, like the queue at a deli counter: take a number, wait until it is
+/// served. First come, first served.
+pub struct TicketLock<T> {
+    next: AtomicUsize,
+    serving: AtomicUsize,
+    value: UnsafeCell<T>,
+}
+
+// SAFETY: only the thread whose ticket is being served reaches the value
+unsafe impl<T: Send> Sync for TicketLock<T> {}
+
+impl<T> TicketLock<T> {
+    pub fn new(value: T) -> Self {
+        let (next, serving) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        let value = UnsafeCell::new(value);
+        TicketLock {
+            next,
+            serving,
+            value,
+        }
+    }
+
+    pub fn lock(&self) -> TicketGuard<'_, T> {
+        let ticket = self.next.fetch_add(1, Relaxed); // every thread gets its own number
+        while self.serving.load(Acquire) != ticket {
+            spin_loop();
+        }
+        TicketGuard { lock: self }
+    }
+}
+
+pub struct TicketGuard<'a, T> {
+    lock: &'a TicketLock<T>,
+}
+
+impl<T> Deref for TicketGuard<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        unsafe { &*self.lock.value.get() } // our ticket is being served
+    }
+}
+
+impl<T> DerefMut for TicketGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        unsafe { &mut *self.lock.value.get() } // our ticket is being served
+    }
+}
+
+impl<T> Drop for TicketGuard<'_, T> {
+    fn drop(&mut self) {
+        self.lock.serving.fetch_add(1, Release); // the next number, please
+    }
+}
+
 /// Every thread calls `take(me)` in a loop for one second.
 fn contest(take: impl Fn(usize) + Sync) {
     let stop = AtomicBool::new(false);
@@ -94,4 +148,8 @@ fn main() {
     let spin = SpinLock::new([0usize; THREADS]);
     contest(|me| spin.lock()[me] += 1);
     report("spinlock", *spin.lock());
+
+    let ticket = TicketLock::new([0usize; THREADS]);
+    contest(|me| ticket.lock()[me] += 1);
+    report("ticket lock", *ticket.lock());
 }

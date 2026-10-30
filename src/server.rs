@@ -7,9 +7,9 @@ use crate::live::Live;
 use crate::math;
 use crate::model::Weights;
 use crate::tokenizer::Tokenizer;
+use crossbeam_channel::{Receiver, unbounded};
 use std::collections::HashMap;
 use std::io;
-use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -43,7 +43,8 @@ pub struct Server {
     /// The weights every worker reads; `reload` swaps in new ones.
     pub model: RwLock<Arc<Weights>>,
     pub tok: Arc<Tokenizer>,
-    /// Part 5: the requests arrive over a channel, and every worker takes from it.
+    /// Part 5: the requests arrive over a channel, and every worker takes from it:
+    /// crossbeam's channels have many receivers, std's mpsc has one.
     pub queue: Receiver<Request>,
     pub stats: Mutex<Stats>,
     /// One slot per prompt. The first worker to need a story writes it into the slot.
@@ -65,7 +66,7 @@ impl Server {
             per_worker: vec![0; workers],
             ..Stats::default()
         };
-        let (users, queue) = mpsc::channel();
+        let (users, queue) = unbounded();
         for req in requests {
             users.send(req).unwrap();
         }

@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use crossbeam_channel::{after, select};
 use llm::chat::{Busy, Chat};
 use llm::generate::{Story, generate, generate_each, generate_live};
 use llm::live::Live;
@@ -84,6 +85,9 @@ enum Cmd {
         /// How many requests may wait for a worker (default: no limit)
         #[arg(long)]
         queue: Option<usize>,
+        /// How long a user waits for the first piece before giving up, in ms
+        #[arg(long)]
+        patience: Option<u64>,
     },
     /// Write a story for each of several users at the same time
     Serve {
@@ -243,10 +247,12 @@ fn main() {
             workers,
             steps,
             queue,
+            patience,
         } => {
             let chat = Chat::start(Arc::new(w), Arc::new(tok), workers, queue);
+            let patience = patience.map_or(Duration::MAX, Duration::from_millis);
             let start = Instant::now();
-            let answers: Vec<Result<Duration, Duration>> = thread::scope(|s| {
+            let answers: Vec<Answer> = thread::scope(|s| {
                 let chat = &chat;
                 let users: Vec<_> = (0..users)
                     .map(|u| {
@@ -255,13 +261,15 @@ fn main() {
                             let asked = Instant::now();
                             let pieces = match chat.try_ask(prompt, steps) {
                                 Ok(pieces) => pieces,
-                                Err(Busy) => return Err(asked.elapsed()), // told at once
+                                Err(Busy) => return Answer::Busy(asked.elapsed()),
                             };
-                            let mut first = None;
-                            for _piece in pieces {
-                                first.get_or_insert(asked.elapsed());
-                            }
-                            Ok(first.unwrap_or_default())
+                            // the first piece, or the end of the user's patience
+                            let first = select! {
+                                recv(pieces) -> _ => asked.elapsed(),
+                                recv(after(patience)) -> _ => return Answer::GaveUp,
+                            }; // gave up: `pieces` is dropped, and the worker's next send fails
+                            for _piece in pieces {} // read the rest of the story
+                            Answer::Story(first)
                         })
                     })
                     .collect();
@@ -269,11 +277,14 @@ fn main() {
             });
             let took = start.elapsed();
             let served = chat.shutdown();
-            let mut ms: Vec<u128> =
-                answers.iter().flatten().map(|d| d.as_millis()).collect();
+            let mut ms: Vec<u128> = answers.iter().filter_map(Answer::first).collect();
             ms.sort();
             let busy: Vec<&Duration> =
-                answers.iter().filter_map(|a| a.as_ref().err()).collect();
+                answers.iter().filter_map(Answer::busy).collect();
+            let gave_up = answers
+                .iter()
+                .filter(|a| matches!(a, Answer::GaveUp))
+                .count();
             let room =
                 queue.map_or("no limit".to_string(), |n| format!("room for {n}"));
             println!(
@@ -283,7 +294,13 @@ fn main() {
             if let Some(slowest) = busy.iter().max() {
                 println!("busy: {} users, told so within {slowest:.2?}", busy.len());
             }
-            println!("requests per worker: {served:?}");
+            if gave_up > 0 {
+                println!("gave up after {patience:.0?}: {gave_up} users");
+            }
+            let stories: Vec<usize> = served.iter().map(|s| s.stories).collect();
+            let tokens: usize = served.iter().map(|s| s.tokens).sum();
+            println!("requests per worker: {stories:?}");
+            println!("tokens written: {tokens}");
         }
         Cmd::Serve { users, steps } => {
             let prompts = PROMPTS.iter().cycle().take(users).map(|p| p.to_string());
@@ -303,6 +320,29 @@ fn main() {
                 "{users} users: {tokens} tokens in {took:.2?}, {rate:.0} tokens/s"
             );
         }
+    }
+}
+
+/// What one chat user got: a story (and when its first piece came), "busy", or tired of
+/// waiting.
+enum Answer {
+    Story(Duration),
+    Busy(Duration),
+    GaveUp,
+}
+
+impl Answer {
+    fn first(&self) -> Option<u128> {
+        let Answer::Story(first) = self else {
+            return None;
+        };
+        Some(first.as_millis())
+    }
+    fn busy(&self) -> Option<&Duration> {
+        let Answer::Busy(took) = self else {
+            return None;
+        };
+        Some(took)
     }
 }
 

@@ -23,7 +23,14 @@ pub struct Busy;
 
 pub struct Chat {
     asks: Sender<Ask>,
-    workers: Vec<JoinHandle<usize>>,
+    workers: Vec<JoinHandle<Served>>,
+}
+
+/// What one worker did: stories, and the tokens it wrote for them.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Served {
+    pub stories: usize,
+    pub tokens: usize,
 }
 
 impl Chat {
@@ -70,8 +77,8 @@ impl Chat {
         }
     }
 
-    /// No more requests: the workers finish the queue and stop. How many each served.
-    pub fn shutdown(self) -> Vec<usize> {
+    /// No more requests: the workers finish the queue and stop. What each one served.
+    pub fn shutdown(self) -> Vec<Served> {
         drop(self.asks); // the last sender: every worker's loop ends once the queue is empty
         let workers = self.workers.into_iter();
         workers
@@ -97,13 +104,14 @@ impl Ask {
 }
 
 /// One worker: wait for a request, stream its story back, repeat.
-fn serve(w: &Weights, tok: &Tokenizer, queue: Receiver<Ask>) -> usize {
-    let mut served = 0;
+fn serve(w: &Weights, tok: &Tokenizer, queue: Receiver<Ask>) -> Served {
+    let mut served = Served::default();
     // waits while the queue is empty, and ends when it is empty and closed
     for ask in queue {
+        // a send fails once the user has dropped its receiver: the story stops there
         let mut send = |piece: &str| ask.reply.send(piece.to_string()).is_ok();
         let live = Live::default();
-        generate_each(
+        let story = generate_each(
             w,
             tok,
             &ask.prompt,
@@ -112,7 +120,8 @@ fn serve(w: &Weights, tok: &Tokenizer, queue: Receiver<Ask>) -> usize {
             &live,
             &mut send,
         );
-        served += 1;
+        served.stories += 1;
+        served.tokens += story.tokens;
     } // each `ask.reply` is dropped at the end of its turn: that user's story is complete
     served
 }

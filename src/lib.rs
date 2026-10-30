@@ -7,6 +7,7 @@ pub mod generate;
 pub mod live;
 pub mod math;
 pub mod model;
+pub mod par;
 pub mod pool;
 pub mod server;
 pub mod threads;

@@ -5,6 +5,7 @@ use llm::generate::{Story, generate, generate_each, generate_live};
 use llm::live::Live;
 use llm::math;
 use llm::model::Weights;
+use llm::par::matmul_rayon;
 use llm::server::{Request, Server, requests};
 use llm::threads::{matmul_halves, matmul_scoped, serve};
 use llm::tokenizer::Tokenizer;
@@ -133,6 +134,11 @@ fn main() {
                         matmul_scoped(o, x, m, threads)
                     };
                     generate(&w, &tok, &prompt, steps, &matmul)
+                }
+                "rayon" => {
+                    let pool = rayon::ThreadPoolBuilder::new().num_threads(threads);
+                    let pool = pool.build().expect("could not start Rayon's threads");
+                    pool.install(|| generate(&w, &tok, &prompt, steps, &matmul_rayon))
                 }
                 other => panic!("unknown mode {other}"),
             };

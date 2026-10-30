@@ -6,9 +6,12 @@ use llm::live::Live;
 use llm::math;
 use llm::model::Weights;
 use llm::par::{matmul_join, matmul_rayon};
+use llm::pool::Pool;
 use llm::server::{Request, Server, requests};
 use llm::threads::{matmul_halves, matmul_scoped, serve};
 use llm::tokenizer::Tokenizer;
+use rayon::prelude::*;
+use std::cell::Cell;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::{Arc, mpsc};
@@ -97,6 +100,8 @@ enum Cmd {
         #[arg(long, default_value_t = 256)]
         steps: usize,
     },
+    /// The whole series in one table: one story, many stories, and Amdahl's law
+    Finale,
 }
 
 #[rustfmt::skip]
@@ -136,8 +141,7 @@ fn main() {
                     generate(&w, &tok, &prompt, steps, &matmul)
                 }
                 "rayon" | "join" => {
-                    let pool = rayon::ThreadPoolBuilder::new().num_threads(threads);
-                    let pool = pool.build().expect("could not start Rayon's threads");
+                    let pool = rayon_pool(threads);
                     let matmul = match mode.as_str() {
                         "rayon" => matmul_rayon,
                         _ => matmul_join,
@@ -330,7 +334,112 @@ fn main() {
                 "{users} users: {tokens} tokens in {took:.2?}, {rate:.0} tokens/s"
             );
         }
+        Cmd::Finale => finale(Box::leak(Box::new(w)), &tok),
     }
+}
+
+/// One story with its matmuls split n ways.
+type Way = fn(&'static Weights, &Tokenizer, usize) -> Story;
+
+/// The series on one screen: one story with every way of splitting its matmuls, how far
+/// splitting can go, and many stories with and without Rayon inside each one.
+fn finale(w: &'static Weights, tok: &Tokenizer) {
+    let prompt = PROMPTS[0];
+    let one = generate(w, tok, prompt, 256, &math::matmul);
+    let ways: [(&str, Way); 4] = [
+        ("part 1  new threads per matmul", |w, tok, n| {
+            let matmul =
+                |o: &mut [f32], x: &[f32], m: &[f32]| matmul_scoped(o, x, m, n);
+            generate(w, tok, PROMPTS[0], 256, &matmul)
+        }),
+        ("part 5  a thread pool", |w, tok, n| {
+            let pool = Pool::new(n);
+            let matmul =
+                |o: &mut [f32], x: &[f32], m: &'static [f32]| pool.matmul(o, x, m);
+            generate(w, tok, PROMPTS[0], 256, &matmul)
+        }),
+        ("part 6  par_iter", |w, tok, n| {
+            rayon_pool(n).install(|| generate(w, tok, PROMPTS[0], 256, &matmul_rayon))
+        }),
+        ("part 6  rayon::join", |w, tok, n| {
+            rayon_pool(n).install(|| generate(w, tok, PROMPTS[0], 256, &matmul_join))
+        }),
+    ];
+    let base = one.tokens_per_sec();
+    println!(
+        "one story, {} tokens, every way at its best number of threads:",
+        one.tokens
+    );
+    println!("part 0  one thread               {base:>4.0} tokens/s");
+    let (mut same, mut best) = (true, (0.0, 0));
+    for (name, way) in ways {
+        let (mut rate, mut threads) = (0.0, 0);
+        for n in [4, 6, 8, 12] {
+            for _ in 0..3 {
+                let story = way(w, tok, n);
+                same &= story.text == one.text;
+                if story.tokens_per_sec() > rate {
+                    (rate, threads) = (story.tokens_per_sec(), n);
+                }
+            }
+        }
+        let faster = rate / base;
+        println!(
+            "{name:<32} {rate:>4.0} tokens/s on {threads:>2} threads, {faster:.1}x"
+        );
+        if rate > best.0 {
+            best = (rate, threads);
+        }
+    }
+    println!("the same story every time: {same}\n");
+
+    // Amdahl's law: only the matmuls run on many threads; the rest stays on one.
+    let in_matmul = Cell::new(Duration::ZERO);
+    let timed = |o: &mut [f32], x: &[f32], m: &[f32]| {
+        let start = Instant::now();
+        math::matmul(o, x, m);
+        in_matmul.set(in_matmul.get() + start.elapsed());
+    };
+    let story = generate(w, tok, prompt, 256, &timed);
+    let p = in_matmul.get().as_secs_f64() / story.took.as_secs_f64();
+    let most = |n: f64| 1.0 / ((1.0 - p) + p / n);
+    let (rate, n) = best;
+    let (share, got) = (p * 100.0, rate / base);
+    let (on_n, on_any) = (most(n as f64), most(f64::INFINITY));
+    println!("one story on one thread: {share:.1} % of the time in matmul");
+    println!("Amdahl: on {n} threads at most {on_n:.1}x faster, we got {got:.1}x");
+    println!("        on any number of threads at most {on_any:.1}x\n");
+
+    // Many stories: one thread each, or Rayon inside each story too.
+    let cores = rayon::current_num_threads();
+    println!("many stories on {cores} threads   one thread each   rayon inside too");
+    for n in [4, 12] {
+        let plain = best_of_3(|| stories(w, tok, &PROMPTS[..n], math::matmul));
+        let nested = best_of_3(|| stories(w, tok, &PROMPTS[..n], matmul_join));
+        let (plain, nested) = (
+            format!("{plain:.0} tokens/s"),
+            format!("{nested:.0} tokens/s"),
+        );
+        println!("{n:>2} stories {plain:>33} {nested:>18}");
+    }
+}
+
+fn rayon_pool(threads: usize) -> rayon::ThreadPool {
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(threads);
+    pool.build().expect("could not start Rayon's threads")
+}
+
+/// Several stories at once on Rayon's threads: tokens per second, all of them together.
+fn stories(
+    w: &Weights,
+    tok: &Tokenizer,
+    prompts: &[&str],
+    matmul: fn(&mut [f32], &[f32], &[f32]),
+) -> f64 {
+    let start = Instant::now();
+    let each = prompts.par_iter();
+    let tokens: usize = each.map(|p| generate(w, tok, p, 256, &matmul).tokens).sum();
+    tokens as f64 / start.elapsed().as_secs_f64()
 }
 
 /// What one chat user got: a story (and when its first piece came), "busy", or tired of

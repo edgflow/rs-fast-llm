@@ -19,6 +19,12 @@ struct Stats([AtomicU64; THREADS]);
 #[derive(Default)]
 struct Pad64(AtomicU64);
 
+/// A counter alone on 128 bytes, the cache line of Apple's M chips
+/// (`sysctl hw.cachelinesize`).
+#[repr(align(128))]
+#[derive(Default)]
+struct Pad128(AtomicU64);
+
 /// Each thread adds one to its own counter, twenty million times.
 fn race<C: Sync>(
     counters: &[C],
@@ -46,4 +52,9 @@ fn main() {
     let took = race(&pad64, |c| &c.0);
     let size = size_of_val(&pad64);
     println!("pad 64:  8 counters in {size} bytes, {took:.2?}");
+
+    let pad128: [Pad128; THREADS] = Default::default();
+    let took = race(&pad128, |c| &c.0);
+    let size = size_of_val(&pad128);
+    println!("pad 128: 8 counters in {size} bytes, {took:.2?}");
 }

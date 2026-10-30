@@ -1,13 +1,14 @@
 use clap::{Parser, Subcommand};
-use llm::generate::{Story, generate, generate_live};
+use llm::generate::{Story, generate, generate_each, generate_live};
 use llm::live::Live;
 use llm::math;
 use llm::model::Weights;
 use llm::server::{Request, Server, requests};
 use llm::threads::{matmul_halves, matmul_scoped, serve};
 use llm::tokenizer::Tokenizer;
-use std::sync::Arc;
+use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -65,6 +66,11 @@ enum Cmd {
     Stop {
         #[arg(long, default_value_t = 300)]
         after: u64,
+    },
+    /// Write one story, and print every piece the moment it is written
+    Stream {
+        #[arg(default_value = "Once upon a time")]
+        prompt: String,
     },
     /// Write a story for each of several users at the same time
     Serve {
@@ -190,6 +196,33 @@ fn main() {
             println!(
                 "stopped after {} tokens, {late:.2?} after the button",
                 story.tokens
+            );
+        }
+        Cmd::Stream { prompt } => {
+            let (w, tok, live) = (&w, &tok, Live::default());
+            let prompt = &prompt;
+            let (tx, rx) = mpsc::channel::<String>();
+            let start = Instant::now();
+            let (first, pieces) = thread::scope(|s| {
+                // the writer owns the sender; when it is done, the sender is dropped
+                s.spawn(move || {
+                    let mut send = |piece: &str| tx.send(piece.to_string()).is_ok();
+                    generate_each(w, tok, prompt, 256, &math::matmul, &live, &mut send)
+                });
+                let (mut first, mut pieces) = (None, 0);
+                print!("{prompt}");
+                for piece in rx {
+                    // the loop ends when every sender is gone
+                    first.get_or_insert(start.elapsed());
+                    pieces += 1;
+                    print!("{piece}");
+                    io::stdout().flush().unwrap();
+                }
+                (first.unwrap_or_default(), pieces)
+            });
+            let took = start.elapsed();
+            println!(
+                "\n\nfirst piece after {first:.2?}, {pieces} pieces in {took:.2?}"
             );
         }
         Cmd::Serve { users, steps } => {

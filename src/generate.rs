@@ -44,6 +44,20 @@ pub fn generate_live(
     matmul: Matmul,
     live: &Live,
 ) -> Story {
+    generate_each(w, tok, prompt, steps, matmul, live, &mut |_| true)
+}
+
+/// Part 5: the same, handing every piece of text to `each` as soon as it is written.
+/// `each` returns false when nobody is listening any more, and the story stops there.
+pub fn generate_each(
+    w: &Weights,
+    tok: &Tokenizer,
+    prompt: &str,
+    steps: usize,
+    matmul: Matmul,
+    live: &Live,
+    each: &mut dyn FnMut(&str) -> bool,
+) -> Story {
     let start = Instant::now();
     let prompt = tok.encode(prompt);
     let mut state = State::new(&w.config);
@@ -64,8 +78,13 @@ pub fn generate_live(
         if next == BOS {
             break;
         }
-        text.push_str(&tok.decode(token, next));
+        let piece = tok.decode(token, next);
+        text.push_str(&piece);
         token = next;
+        // only the tokens the model writes go to the user, not the prompt
+        if written > 0 && !each(&piece) {
+            break; // nobody is listening any more: stop writing
+        }
     }
     Story {
         text,

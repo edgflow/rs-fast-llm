@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use llm::chat::Chat;
+use llm::chat::{Busy, Chat};
 use llm::generate::{Story, generate, generate_each, generate_live};
 use llm::live::Live;
 use llm::math;
@@ -81,6 +81,9 @@ enum Cmd {
         workers: usize,
         #[arg(long, default_value_t = 64)]
         steps: usize,
+        /// How many requests may wait for a worker (default: no limit)
+        #[arg(long)]
+        queue: Option<usize>,
     },
     /// Write a story for each of several users at the same time
     Serve {
@@ -239,21 +242,26 @@ fn main() {
             users,
             workers,
             steps,
+            queue,
         } => {
-            let chat = Chat::start(Arc::new(w), Arc::new(tok), workers);
+            let chat = Chat::start(Arc::new(w), Arc::new(tok), workers, queue);
             let start = Instant::now();
-            let mut waits: Vec<Duration> = thread::scope(|s| {
+            let answers: Vec<Result<Duration, Duration>> = thread::scope(|s| {
                 let chat = &chat;
                 let users: Vec<_> = (0..users)
                     .map(|u| {
                         s.spawn(move || {
-                            let pieces = chat.ask(PROMPTS[u % PROMPTS.len()], steps);
+                            let prompt = PROMPTS[u % PROMPTS.len()];
                             let asked = Instant::now();
+                            let pieces = match chat.try_ask(prompt, steps) {
+                                Ok(pieces) => pieces,
+                                Err(Busy) => return Err(asked.elapsed()), // told at once
+                            };
                             let mut first = None;
                             for _piece in pieces {
                                 first.get_or_insert(asked.elapsed());
                             }
-                            first.unwrap_or_default()
+                            Ok(first.unwrap_or_default())
                         })
                     })
                     .collect();
@@ -261,12 +269,20 @@ fn main() {
             });
             let took = start.elapsed();
             let served = chat.shutdown();
-            waits.sort();
-            let ms: Vec<u128> = waits.iter().map(|d| d.as_millis()).collect();
+            let mut ms: Vec<u128> =
+                answers.iter().flatten().map(|d| d.as_millis()).collect();
+            ms.sort();
+            let busy: Vec<&Duration> =
+                answers.iter().filter_map(|a| a.as_ref().err()).collect();
+            let room =
+                queue.map_or("no limit".to_string(), |n| format!("room for {n}"));
             println!(
-                "{users} users, {workers} workers: every story streamed in {took:.2?}"
+                "{users} users, {workers} workers, a queue with {room}: done in {took:.2?}"
             );
             println!("first piece after, in ms: {ms:?}");
+            if let Some(slowest) = busy.iter().max() {
+                println!("busy: {} users, told so within {slowest:.2?}", busy.len());
+            }
             println!("requests per worker: {served:?}");
         }
         Cmd::Serve { users, steps } => {

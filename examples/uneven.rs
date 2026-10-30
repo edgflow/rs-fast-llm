@@ -119,23 +119,29 @@ fn steal_one<T>(stealers: &[Stealer<T>], me: usize, stolen: &mut usize) -> Optio
 }
 
 /// Rayon: the same requests as a parallel iterator, on a pool of four threads that steal
-/// from each other. Every thread adds what it did to its own slot of `busy`.
+/// from each other. No shared state: every request returns what it did, and `collect`
+/// gathers the results.
 fn rayon(w: &Weights, tok: &Tokenizer) -> Vec<Busy> {
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(THREADS)
         .build()
         .unwrap();
     let reqs = requests();
-    let mut busy: Vec<Busy> = (0..THREADS).map(|_| Busy::default()).collect();
-    pool.install(|| {
-        reqs.par_iter().for_each(|&(prompt, steps)| {
-            let start = Instant::now();
-            let tokens = generate(w, tok, prompt, steps, &math::matmul).tokens;
-            let me = rayon::current_thread_index().unwrap();
-            busy[me].tokens += tokens;
-            busy[me].took += start.elapsed();
-        })
+    let done: Vec<(usize, usize, Duration)> = pool.install(|| {
+        reqs.par_iter()
+            .map(|&(prompt, steps)| {
+                let start = Instant::now();
+                let tokens = generate(w, tok, prompt, steps, &math::matmul).tokens;
+                let me = rayon::current_thread_index().unwrap();
+                (me, tokens, start.elapsed())
+            })
+            .collect()
     });
+    let mut busy: Vec<Busy> = (0..THREADS).map(|_| Busy::default()).collect();
+    for (me, tokens, took) in done {
+        busy[me].tokens += tokens;
+        busy[me].took += took;
+    }
     busy
 }
 

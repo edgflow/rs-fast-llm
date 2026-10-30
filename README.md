@@ -28,6 +28,9 @@ cargo run --release -- stream                                # a story over a ch
 cargo run --release -- chat --users 32 --queue 8             # backpressure: busy, at once
 cargo run --release -- chat --users 32 --patience 300        # select!: a user who hangs up stops the story
 cargo run --release --example pool                           # a thread pool vs new threads per matmul
+cargo run --release --example uneven                         # uneven work: split in advance, stealing, Rayon
+cargo run --release -- generate --mode join --threads 8      # one story, matmuls split with rayon::join
+cargo run --release -- finale                                # the whole series in one table
 ```
 
 Each part of the series is a range of git tags: `p1-step-0` … for part 1, `p2-step-0` … for part 2, and so on.
@@ -40,6 +43,7 @@ Check out a tag to get the code exactly as it is at that moment of the video.
 | 3 | Atomics and memory ordering: lost updates and `fetch_add`, a live token counter and a stop button (`Relaxed`), a ready flag (`Release`/`Acquire`), a handshake only `SeqCst` gets right, happens-before, `loom` | `p3-step-0` … `p3-step-10` |
 | 4 | Lock-free: a token budget with compare-and-swap (`compare_exchange_weak`, `fetch_update`), lock-free vs wait-free, a spinlock and a fair ticket lock built from atomics, false sharing and 128-byte cache lines | `p4-step-0` … `p4-step-8` |
 | 5 | Channels and thread pools: `mpsc` and its one receiver (E0277), crossbeam-channel, a streaming inference server (a reply channel per user), backpressure with a bounded queue and `try_send`, `select!` with a timeout and a user who hangs up, a thread pool whose jobs own their data | `p5-step-0` … `p5-step-8` |
+| 6 | Work stealing and Rayon: uneven work split in advance vs a deque per thread that steals (crossbeam-deque), `par_iter` and why its closures are `Fn` (E0594), a matmul split with `par_iter_mut` and with `rayon::join`, nested parallelism, Amdahl's law | `p6-step-0` … `p6-step-7` |
 
 The model files are not in the repo: `models/get.sh` downloads them from
 [karpathy/tinyllamas](https://huggingface.co/karpathy/tinyllamas) and [karpathy/llama2.c](https://github.com/karpathy/llama2.c).

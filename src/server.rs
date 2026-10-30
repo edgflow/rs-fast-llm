@@ -7,8 +7,9 @@ use crate::live::Live;
 use crate::math;
 use crate::model::Weights;
 use crate::tokenizer::Tokenizer;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::io;
+use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -42,7 +43,8 @@ pub struct Server {
     /// The weights every worker reads; `reload` swaps in new ones.
     pub model: RwLock<Arc<Weights>>,
     pub tok: Arc<Tokenizer>,
-    pub queue: Mutex<VecDeque<Request>>,
+    /// Part 5: the requests arrive over a channel, and every worker takes from it.
+    pub queue: Receiver<Request>,
     pub stats: Mutex<Stats>,
     /// One slot per prompt. The first worker to need a story writes it into the slot.
     pub cache: Mutex<HashMap<String, Arc<OnceLock<Story>>>>,
@@ -63,10 +65,15 @@ impl Server {
             per_worker: vec![0; workers],
             ..Stats::default()
         };
+        let (users, queue) = mpsc::channel();
+        for req in requests {
+            users.send(req).unwrap();
+        }
+        drop(users); // no more requests: the queue ends when it is empty
         Arc::new(Server {
             model: RwLock::new(Arc::new(model)),
             tok: Arc::new(tok),
-            queue: Mutex::new(requests.into()),
+            queue,
             stats: Mutex::new(stats),
             cache: Mutex::new(HashMap::new()),
             live: Live::default(),
@@ -102,8 +109,8 @@ impl Server {
     fn worker(&self, me: usize) {
         let tok = &self.tok;
         loop {
-            let next = self.queue.lock().unwrap().pop_front(); // guard dropped here
-            let Some(req) = next else { break };
+            // Err: the queue is empty and every sender is gone
+            let Ok(req) = self.queue.recv() else { break };
             if !self.budget.try_take(req.steps) {
                 self.stats().rejected += 1; // over budget: this user gets an error, not a story
                 continue;
